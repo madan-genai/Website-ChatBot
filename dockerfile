@@ -1,12 +1,20 @@
-FROM Python 3.14.5
+# Base image (stable, production-ready)
+FROM python:3.12-slim
 
+# Prevent Python from writing .pyc files + better logs
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies (Playwright + browser support)
 RUN apt-get update && apt-get install -y \
     wget \
     curl \
     gnupg \
     libglib2.0-0 \
     libnss3 \
-    libgconf-2-4 \
     libfontconfig1 \
     libx11-6 \
     libxcomposite1 \
@@ -23,21 +31,23 @@ RUN apt-get update && apt-get install -y \
     libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
-
+# Copy requirements first (for caching layer optimization)
 COPY requirements.txt .
 
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-RUN playwright install chromium
-RUN playwright install-deps
+# Install Playwright browser
+RUN pip install playwright && playwright install chromium
 
-
+# Copy project files
 COPY . .
 
-
+# Create data folder for SQLite / metadata
 RUN mkdir -p data
 
+# Expose FastAPI port
 EXPOSE 8000
 
+# Start application
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

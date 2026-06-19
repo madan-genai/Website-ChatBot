@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+pydantic
+
+playwright
+beautifulsoup4
+
+langchain-core
+langchain-community
+langchain-qdrant
+langchain-ollama
+qdrant-client

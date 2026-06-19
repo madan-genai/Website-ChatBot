@@ -1,5 +1,4 @@
 import uuid
-import asyncio
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
@@ -13,17 +12,34 @@ from config import LLM_MODEL, OLLAMA_BASE_URL
 
 from langchain_ollama import ChatOllama
 
-app = FastAPI(title="Async Production RAG Website Chatbot")
+app = FastAPI(title="Optimized Async RAG Chatbot")
 
+# ---------------------------
+# LLM (optimized for speed)
+# ---------------------------
 llm = ChatOllama(
     model=LLM_MODEL,
     base_url=OLLAMA_BASE_URL,
     temperature=0,
-    num_ctx=1024
+    num_ctx=1024,
+    num_predict=120  # 🔥 CRITICAL SPEED BOOST
 )
 
-async def index_site(index_id: str, url: str):
+# ---------------------------
+# Warm-up model (fix cold start lag)
+# ---------------------------
+@app.on_event("startup")
+async def warmup():
+    try:
+        llm.invoke("hi")
+    except:
+        pass
 
+
+# ---------------------------
+# Background indexing
+# ---------------------------
+async def index_site(index_id: str, url: str):
     try:
         await run_in_threadpool(save_index, index_id, url, "", "processing")
 
@@ -31,7 +47,8 @@ async def index_site(index_id: str, url: str):
         docs = await run_in_threadpool(crawler.crawl)
 
         if not docs:
-            raise Exception("No content crawled")
+            await run_in_threadpool(save_index, index_id, url, "", "failed: no content")
+            return
 
         collection = f"site_{index_id}"
 
@@ -55,9 +72,11 @@ async def index_site(index_id: str, url: str):
         )
 
 
+# ---------------------------
+# Index endpoint
+# ---------------------------
 @app.post("/index")
 async def index(req: IndexRequest, background_tasks: BackgroundTasks):
-
     index_id = str(uuid.uuid4())
 
     background_tasks.add_task(index_site, index_id, req.url)
@@ -67,9 +86,12 @@ async def index(req: IndexRequest, background_tasks: BackgroundTasks):
         "status": "started"
     }
 
+
+# ---------------------------
+# Status endpoint
+# ---------------------------
 @app.get("/index/{index_id}")
 async def status(index_id: str):
-
     data = await run_in_threadpool(get_index, index_id)
 
     if not data:
@@ -82,6 +104,10 @@ async def status(index_id: str):
         "status": data[3]
     }
 
+
+# ---------------------------
+# Chat endpoint (OPTIMIZED STREAMING RAG)
+# ---------------------------
 @app.post("/chat/stream")
 async def chat(req: QueryRequest):
 
@@ -100,50 +126,60 @@ async def chat(req: QueryRequest):
     docs = await run_in_threadpool(
         store.similarity_search,
         req.question,
-        2
+        2  # 🔥 small k for speed
     )
 
+    # ---------------------------
+    # FAST FAIL (NO LLM CALL)
+    # ---------------------------
     if not docs:
+        return StreamingResponse(
+            iter(["I don't know based on the provided context."]),
+            media_type="text/plain"
+        )
 
-        async def empty():
-            yield "I don't know based on the provided website."
+    # ---------------------------
+    # Context compression (speed optimized)
+    # ---------------------------
+    context = "\n\n".join(
+        d.page_content[:250] for d in docs
+    )
 
-        return StreamingResponse(empty(), media_type="text/plain")
-
-    context = "\n\n".join([d.page_content[:400] for d in docs])
-
+    # ---------------------------
+    # Ultra-light prompt (fast inference)
+    # ---------------------------
     prompt = f"""
-You are a strict RAG system.
+Answer ONLY using the context.
 
-RULES:
-- Use ONLY the context below.
-- If context does NOT contain the answer, respond exactly:
-  "I don't know based on the provided context."
-- Do NOT use any external knowledge.
-- Do NOT guess.
+If not found, say:
+"I don't know based on context."
 
 Context:
-{context if context else "EMPTY CONTEXT"}
+{context}
 
-Question:
-{req.question}
+Q: {req.question}
 
-Answer:
-"""
+A:
+""".strip()
+
+    # ---------------------------
+    # TRUE STREAMING (NO LIST CONVERSION)
+    # ---------------------------
     async def stream():
-
-        for chunk in await run_in_threadpool(lambda: list(llm.stream(prompt))):
+        for chunk in llm.stream(prompt):
             if chunk.content:
                 yield chunk.content
-
-            await asyncio.sleep(0)  
 
     return StreamingResponse(stream(), media_type="text/plain")
 
 
+# ---------------------------
+# Health check
+# ---------------------------
 @app.get("/")
 async def root():
     return {
         "status": "running",
-        "system": "async-fast-production-rag"
+        "system": "optimized-fast-rag",
+        "model": LLM_MODEL
     }

@@ -4,6 +4,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 from collections import deque
 import logging
 
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,9 @@ class WebsiteCrawler:
 
     def __init__(self, url: str, max_pages: int = 20):
         self.start_url = self.normalize(url)
-        self.domain = urlparse(self.start_url).netloc
+
+        self.domain = self._clean_domain(self.start_url)
+
         self.max_pages = max_pages
 
         self.visited = set()
@@ -23,18 +26,56 @@ class WebsiteCrawler:
 
         self.docs = []
 
-    def normalize(self, url):
-        p = urlparse(url)
-        path = p.path.rstrip("/") or "/"
-        return urlunparse(p._replace(path=path, query="", fragment=""))
+    # -----------------------------
+    # URL NORMALIZATION (FIXED)
+    # -----------------------------
+    def normalize(self, url: str) -> str:
+        url = url.strip()
 
-    def is_valid(self, url):
-        p = urlparse(url)
-        return p.scheme in ["http", "https"] and p.netloc == self.domain
+        # Auto-add scheme if missing
+        if not url.startswith(("http://", "https://")):
+            url = "http://" + url
 
-    def extract(self, soup):
-        for t in soup(self.STRIP_TAGS):
-            t.decompose()
+        parsed = urlparse(url)
+
+        # Normalize domain (remove www)
+        netloc = parsed.netloc.lower().replace("www.", "")
+
+        path = parsed.path.rstrip("/") or "/"
+
+        return urlunparse(
+            parsed._replace(
+                scheme=parsed.scheme.lower(),
+                netloc=netloc,
+                path=path,
+                query="",
+                fragment=""
+            )
+        )
+
+    def _clean_domain(self, url: str) -> str:
+        return urlparse(url).netloc.lower().replace("www.", "")
+
+    # -----------------------------
+    # URL VALIDATION
+    # -----------------------------
+    def is_valid(self, url: str) -> bool:
+        try:
+            p = urlparse(url)
+            return (
+                p.scheme in ["http", "https"]
+                and bool(p.netloc)
+                and self._clean_domain(url) == self.domain
+            )
+        except:
+            return False
+
+    # -----------------------------
+    # TEXT EXTRACTION
+    # -----------------------------
+    def extract(self, soup: BeautifulSoup) -> str:
+        for tag in soup(self.STRIP_TAGS):
+            tag.decompose()
 
         texts = []
         for tag in soup.find_all(self.CONTENT_TAGS):
@@ -44,6 +85,9 @@ class WebsiteCrawler:
 
         return "\n".join(texts)
 
+    # -----------------------------
+    # MAIN CRAWLER
+    # -----------------------------
     def crawl(self):
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -51,16 +95,22 @@ class WebsiteCrawler:
 
             while self.queue and len(self.visited) < self.max_pages:
                 url = self.queue.popleft()
+
+                # skip duplicates
                 if url in self.visited:
                     continue
 
                 self.visited.add(url)
 
+                logger.info(f"Crawling: {url}")
+
                 page = ctx.new_page()
+
                 try:
                     page.goto(url, timeout=30000)
                     html = page.content()
-                except:
+                except Exception as e:
+                    logger.warning(f"Failed: {url} | {e}")
                     continue
                 finally:
                     page.close()
@@ -74,8 +124,10 @@ class WebsiteCrawler:
                         "content": text
                     })
 
+                # discover links
                 for a in soup.find_all("a", href=True):
                     link = self.normalize(urljoin(url, a["href"]))
+
                     if self.is_valid(link) and link not in self.visited:
                         self.queue.append(link)
 

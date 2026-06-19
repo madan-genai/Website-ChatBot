@@ -7,23 +7,27 @@ from starlette.concurrency import run_in_threadpool
 
 from models import IndexRequest, QueryRequest
 from scraper import WebsiteCrawler
-from vectorstore import build_vectorstore, load_vectorstore
+from vectorstore import build_vectorstore, load_vectorstore, retrieve_documents
 from db import save_index, get_index
 from config import LLM_MODEL, OLLAMA_BASE_URL
 
 from langchain_ollama import ChatOllama
 
-app = FastAPI(title="Async Production RAG Website Chatbot")
 
+app = FastAPI(title="Production RAG Website Chatbot")
+
+
+# =========================
+# LLM (Qwen 2.5 1.5B)
+# =========================
 llm = ChatOllama(
-    model=LLM_MODEL,
+    model=LLM_MODEL,  # qwen2.5:1.5b
     base_url=OLLAMA_BASE_URL,
     temperature=0,
-    num_ctx=1024
+    num_ctx=4096,
 )
 
 async def index_site(index_id: str, url: str):
-
     try:
         await run_in_threadpool(save_index, index_id, url, "", "processing")
 
@@ -31,18 +35,22 @@ async def index_site(index_id: str, url: str):
         docs = await run_in_threadpool(crawler.crawl)
 
         if not docs:
-            raise Exception("No content crawled")
+            raise Exception("No content crawled from website")
 
-        collection = f"site_{index_id}"
+        collection_name = f"site_{index_id}"
 
-        await run_in_threadpool(build_vectorstore, docs, collection)
+        await run_in_threadpool(
+            build_vectorstore,
+            docs,
+            collection_name,
+        )
 
         await run_in_threadpool(
             save_index,
             index_id,
             url,
-            collection,
-            "completed"
+            collection_name,
+            "completed",
         )
 
     except Exception as e:
@@ -51,35 +59,32 @@ async def index_site(index_id: str, url: str):
             index_id,
             url,
             "",
-            f"failed: {str(e)}"
+            f"failed: {str(e)}",
         )
-
 
 @app.post("/index")
 async def index(req: IndexRequest, background_tasks: BackgroundTasks):
-
     index_id = str(uuid.uuid4())
 
     background_tasks.add_task(index_site, index_id, req.url)
 
     return {
         "index_id": index_id,
-        "status": "started"
+        "status": "started",
     }
 
 @app.get("/index/{index_id}")
 async def status(index_id: str):
-
     data = await run_in_threadpool(get_index, index_id)
 
     if not data:
-        raise HTTPException(404, "Not found")
+        raise HTTPException(status_code=404, detail="Index not found")
 
     return {
         "index_id": data[0],
         "url": data[1],
         "collection": data[2],
-        "status": data[3]
+        "status": data[3],
     }
 
 @app.post("/chat/stream")
@@ -88,55 +93,66 @@ async def chat(req: QueryRequest):
     meta = await run_in_threadpool(get_index, req.index_id)
 
     if not meta:
-        raise HTTPException(404, "Index not found")
+        raise HTTPException(status_code=404, detail="Index not found")
 
     if meta[3] != "completed":
-        raise HTTPException(400, "Index not ready")
+        raise HTTPException(status_code=400, detail="Index not ready")
 
-    collection = meta[2]
+    collection_name = meta[2]
 
-    store = await run_in_threadpool(load_vectorstore, collection)
+    # Load vector store
+    store = await run_in_threadpool(load_vectorstore, collection_name)
 
+    
     docs = await run_in_threadpool(
-        store.similarity_search,
+        retrieve_documents,
+        store,
         req.question,
-        2
+        4,
     )
 
+    
     if not docs:
 
-        async def empty():
-            yield "I don't know based on the provided website."
+        async def no_context_stream():
+            yield "I don't know based on the provided context."
 
-        return StreamingResponse(empty(), media_type="text/plain")
+        return StreamingResponse(no_context_stream(), media_type="text/plain")
 
-    context = "\n\n".join([d.page_content[:400] for d in docs])
+    # Build context
+    context = "\n\n".join(
+        d.page_content[:400] for d in docs
+    )
 
     prompt = f"""
-You are a strict RAG system.
+You are a precise website assistant.
 
-RULES:
-- Use ONLY the context below.
-- If context does NOT contain the answer, respond exactly:
+Rules:
+- Use ONLY the provided context
+- Do NOT hallucinate
+- If answer is missing, say exactly:
   "I don't know based on the provided context."
-- Do NOT use any external knowledge.
-- Do NOT guess.
 
 Context:
-{context if context else "EMPTY CONTEXT"}
+{context}
 
 Question:
 {req.question}
 
 Answer:
-"""
+""".strip()
+
+    # Streaming generator
     async def stream():
 
-        for chunk in await run_in_threadpool(lambda: list(llm.stream(prompt))):
-            if chunk.content:
-                yield chunk.content
+        def generate():
+            for chunk in llm.stream(prompt):
+                if chunk.content:
+                    yield chunk.content
 
-            await asyncio.sleep(0)  
+        for token in generate():
+            yield token
+            await asyncio.sleep(0)
 
     return StreamingResponse(stream(), media_type="text/plain")
 
@@ -145,5 +161,13 @@ Answer:
 async def root():
     return {
         "status": "running",
-        "system": "async-fast-production-rag"
+        "system": "production-rag-chatbot",
+        "model": LLM_MODEL,
+    }
+
+
+@app.get("/health")
+async def health():
+    return {
+        "status": "healthy"
     }

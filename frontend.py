@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import time
 
+API_BASE="https://website-chat-bot-smoky.vercel.app/"
 API_URL = "http://127.0.0.1:8000"
 
 st.set_page_config(

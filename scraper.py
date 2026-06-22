@@ -3,7 +3,8 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, urlunparse
 from collections import deque
 import logging
-
+import time
+import hashlib
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -14,51 +15,39 @@ class WebsiteCrawler:
     STRIP_TAGS = ["script", "style", "nav", "footer", "header", "aside"]
     CONTENT_TAGS = ["p", "li", "h1", "h2", "h3", "article", "main"]
 
-    def __init__(self, url: str, max_pages: int = 20):
+    def __init__(self, url: str, max_pages: int = 20, delay: float = 1.0):
         self.start_url = self.normalize(url)
-
         self.domain = self._clean_domain(self.start_url)
 
         self.max_pages = max_pages
+        self.delay = delay
 
         self.visited = set()
         self.queue = deque([self.start_url])
-
         self.docs = []
 
-    # -----------------------------
-    # URL NORMALIZATION (FIXED)
-    # -----------------------------
     def normalize(self, url: str) -> str:
         url = url.strip()
 
-        # Auto-add scheme if missing
         if not url.startswith(("http://", "https://")):
             url = "http://" + url
 
         parsed = urlparse(url)
-
-        # Normalize domain (remove www)
         netloc = parsed.netloc.lower().replace("www.", "")
-
         path = parsed.path.rstrip("/") or "/"
 
-        return urlunparse(
-            parsed._replace(
-                scheme=parsed.scheme.lower(),
-                netloc=netloc,
-                path=path,
-                query="",
-                fragment=""
-            )
-        )
+        return urlunparse(parsed._replace(
+            scheme=parsed.scheme.lower(),
+            netloc=netloc,
+            path=path,
+            query="",
+            fragment=""
+        ))
 
     def _clean_domain(self, url: str) -> str:
         return urlparse(url).netloc.lower().replace("www.", "")
 
-    # -----------------------------
-    # URL VALIDATION
-    # -----------------------------
+
     def is_valid(self, url: str) -> bool:
         try:
             p = urlparse(url)
@@ -70,24 +59,29 @@ class WebsiteCrawler:
         except:
             return False
 
-    # -----------------------------
-    # TEXT EXTRACTION
-    # -----------------------------
+
     def extract(self, soup: BeautifulSoup) -> str:
-        for tag in soup(self.STRIP_TAGS):
+        for tag in soup.find_all(self.STRIP_TAGS):
             tag.decompose()
 
         texts = []
         for tag in soup.find_all(self.CONTENT_TAGS):
             text = tag.get_text(" ", strip=True)
-            if len(text) > 50:
+
+            # better filtering
+            if text and len(text) > 40:
                 texts.append(text)
 
-        return "\n".join(texts)
+        cleaned = "\n".join(texts)
 
-    # -----------------------------
-    # MAIN CRAWLER
-    # -----------------------------
+        cleaned = " ".join(cleaned.split())
+
+        return cleaned
+    
+    def get_hash(self, text: str) -> str:
+        return hashlib.md5(text.encode("utf-8")).hexdigest()
+
+  
     def crawl(self):
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -96,7 +90,6 @@ class WebsiteCrawler:
             while self.queue and len(self.visited) < self.max_pages:
                 url = self.queue.popleft()
 
-                # skip duplicates
                 if url in self.visited:
                     continue
 
@@ -109,6 +102,9 @@ class WebsiteCrawler:
                 try:
                     page.goto(url, timeout=30000)
                     html = page.content()
+
+                    time.sleep(self.delay)
+
                 except Exception as e:
                     logger.warning(f"Failed: {url} | {e}")
                     continue
@@ -121,15 +117,18 @@ class WebsiteCrawler:
                 if len(text) > 200:
                     self.docs.append({
                         "url": url,
-                        "content": text
+                        "content": text,
+                        "hash": self.get_hash(text)
                     })
 
-                # discover links
+                
                 for a in soup.find_all("a", href=True):
                     link = self.normalize(urljoin(url, a["href"]))
 
                     if self.is_valid(link) and link not in self.visited:
-                        self.queue.append(link)
+                    
+                        if len(self.queue) < 1000:
+                            self.queue.append(link)
 
             browser.close()
 

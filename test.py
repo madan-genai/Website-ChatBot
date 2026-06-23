@@ -1,127 +1,178 @@
+import streamlit as st
+import requests
 import uuid
-import asyncio
+from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import StreamingResponse
-from starlette.concurrency import run_in_threadpool
+API_BASE = "http://localhost:8000"
+POLL_INTERVAL = 2
 
-from langchain_ollama import ChatOllama
-from langchain_core.prompts import PromptTemplate
 
-from models import IndexRequest, QueryRequest
-from scraper import WebsiteCrawler
-from vectorstore import build_vectorstore, load_vectorstore
-from db import save_index, get_index
-from config import LLM_MODEL, OLLAMA_BASE_URL
-import logging
+def init():
+    if "user_id" not in st.session_state:
+        st.session_state.user_id = str(uuid.uuid4())
 
-logger = logging.getLogger(__name__)
+    if "active_index" not in st.session_state:
+        st.session_state.active_index = None
 
-app = FastAPI(title="Async Production RAG Website Chatbot")
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = {}
 
-llm = ChatOllama(
-    model=LLM_MODEL,
-    base_url=OLLAMA_BASE_URL,
-    temperature=0,
-    num_ctx=1024
+    if "index_jobs" not in st.session_state:
+        st.session_state.index_jobs = {}
+
+
+init()
+
+def create_index(url: str):
+    return requests.post(
+        f"{API_BASE}/index",
+        json={
+            "url": url,
+            "user_id": st.session_state.user_id,
+        },
+        timeout=20,
+    )
+
+
+def get_status(index_id: str):
+    return requests.get(
+        f"{API_BASE}/index/{index_id}",
+        params={"user_id": st.session_state.user_id},
+        timeout=10,
+    )
+
+
+def chat_stream(index_id: str, question: str):
+    return requests.post(
+        f"{API_BASE}/chat/stream",
+        json={
+            "index_id": index_id,
+            "question": question,
+            "user_id": st.session_state.user_id,
+            "top_k": 5,
+        },
+        stream=True,
+        timeout=120,
+    )
+
+
+st.set_page_config(
+    page_title="WebMind RAG",
+    page_icon="🧠",
+    layout="wide",
 )
 
-PROMPT_TEMPLATE = PromptTemplate.from_template("""
-Use ONLY the context below. If unsure, say "I don't know".
-
-Context:
-{context}
-
-Question:
-{question}
-
-Answer:
-""")
+st.title("🧠 WebMind — Multi-Tenant RAG System")
 
 
-async def index_site(index_id: str, url: str):
-    try:
-        await run_in_threadpool(save_index, index_id, url, "", "processing")
+with st.sidebar:
 
-        crawler = WebsiteCrawler(url)
-        docs = await run_in_threadpool(crawler.crawl)
+    st.header(" Control Panel")
+    st.caption(f"User: {st.session_state.user_id[:8]}")
 
-        if not docs:
-            raise Exception("No content crawled")
+  
+    st.subheader("🔗 Index Website")
 
-        collection = f"site_{index_id}"
-        await run_in_threadpool(build_vectorstore, docs, collection)
-        await run_in_threadpool(save_index, index_id, url, collection, "completed")
+    url = st.text_input("Enter URL")
 
-    except Exception as e:
-        logger.error(f"Indexing failed [{index_id}]: {e}")
-        await run_in_threadpool(save_index, index_id, url, "", f"failed: {str(e)}")
+    if st.button("🚀 Index"):
+        if url.strip():
 
-@app.post("/index")
-async def index(req: IndexRequest, background_tasks: BackgroundTasks):
-    index_id = str(uuid.uuid4())
-    background_tasks.add_task(index_site, index_id, req.url)
-    return {"index_id": index_id, "status": "started"}
+            res = create_index(url)
 
+            if res.status_code == 200:
+                data = res.json()
+                index_id = data["index_id"]
 
-@app.get("/index/{index_id}")
-async def status(index_id: str):
-    data = await run_in_threadpool(get_index, index_id)
-    if not data:
-        raise HTTPException(404, "Not found")
-    return {
-        "index_id": data[0],
-        "url": data[1],
-        "collection": data[2],
-        "status": data[3]
-    }
+                st.session_state.index_jobs[index_id] = {
+                    "url": url,
+                    "status": "processing",
+                }
 
+                st.success("Indexing started")
+                st.rerun()
 
-@app.post("/chat/stream")
-async def chat(req: QueryRequest):
-    # 1. Validate index
-    meta = await run_in_threadpool(get_index, req.index_id)
-    if not meta:
-        raise HTTPException(404, "Index not found")
-    if meta[3] != "completed":
-        raise HTTPException(400, "Index not ready")
+    st.subheader("⏳ Active Jobs")
 
-    # 2. Load vectorstore + search
-    collection = meta[2]
-    store = await run_in_threadpool(load_vectorstore, collection)
-    docs = await run_in_threadpool(
-        store.similarity_search, req.question, 3
-    )
+    for index_id, job in list(st.session_state.index_jobs.items()):
 
-    # 3. No docs fallback
-    if not docs:
-        async def empty():
-            yield "I don't know based on the provided website."
-        return StreamingResponse(empty(), media_type="text/plain")
-
-    # 4. Build prompt
-    context = "\n\n".join([d.page_content[:500] for d in docs])
-    prompt = PROMPT_TEMPLATE.format(
-        context=context,
-        question=req.question
-    )
-
-    async def stream():
         try:
-            async for chunk in llm.astream(prompt):
-                if chunk.content:
-                    yield chunk.content
-                    await asyncio.sleep(0)  # keep event loop free
-        except asyncio.CancelledError:
-            # Client disconnected cleanly
-            logger.info("Client disconnected mid-stream")
-        except Exception as e:
-            logger.error(f"Stream error: {e}")
-            yield f"\n[Stream Error: {str(e)}]"
+            res = get_status(index_id)
+            data = res.json()
+            status = data.get("status")
 
-    return StreamingResponse(stream(), media_type="text/plain")
+            if status == "completed":
+                st.success(f"Ready: {job['url'][:40]}")
+                del st.session_state.index_jobs[index_id]
+
+            elif "failed" in status:
+                st.error(f"Failed: {job['url'][:40]}")
+                del st.session_state.index_jobs[index_id]
+
+            else:
+                st.info(f"Processing: {job['url'][:40]}")
+
+        except Exception:
+            st.warning("Status check failed")
+
+    # ── INDEX LIST
+    st.subheader("📚 Indexed Sites")
+
+    for index_id, job in st.session_state.index_jobs.items():
+        if st.button(job["url"][:35], key=index_id):
+            st.session_state.active_index = index_id
+            st.rerun()
 
 
-@app.get("/")
-async def root():
-    return {"status": "running", "system": "astream-rag"}
+active = st.session_state.active_index
+
+if not active:
+    st.info("Select an indexed website to start chatting.")
+    st.stop()
+
+
+if active not in st.session_state.chat_history:
+    st.session_state.chat_history[active] = []
+
+history = st.session_state.chat_history[active]
+
+
+st.subheader("💬 Chat with Website")
+
+
+# ── CHAT RENDER
+for msg in history:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+
+# ── INPUT
+question = st.chat_input("Ask something...")
+
+if question:
+
+    history.append({"role": "user", "content": question})
+
+    with st.chat_message("user"):
+        st.markdown(question)
+
+    with st.chat_message("assistant"):
+        box = st.empty()
+        answer = ""
+
+        response = chat_stream(active, question)
+
+        if response.status_code == 200:
+
+            for chunk in response.iter_content(decode_unicode=True):
+                if chunk:
+                    answer += chunk
+                    box.markdown(answer + "▌")
+
+            box.markdown(answer)
+
+        else:
+            answer = "Error generating response"
+            box.error(answer)
+
+    history.append({"role": "assistant", "content": answer})

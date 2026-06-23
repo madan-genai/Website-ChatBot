@@ -1,0 +1,53 @@
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+env/
+.myvenv/
+.venv/
+
+
+.env
+*.env
+
+# =====================
+# Logs
+# =====================
+*.log
+logs/
+
+# =====================
+# IDE
+# =====================
+.vscode/
+.idea/
+
+# =====================
+# OS files
+# =====================
+.DS_Store
+Thumbs.db
+
+# =====================
+# FastAPI / runtime
+# =====================
+*.sqlite3
+*.db
+
+# =====================
+# Vector DB / AI caches
+# =====================
+qdrant_storage/
+chroma/
+faiss_index/
+*.index
+
+# =====================
+# Temporary files
+# =====================
+temp/
+tmp/

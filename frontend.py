@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import time
 
-API_URL = "https://website-chat-o6s2gq62u-madan-lals-projects-17fade47.vercel.app"
+API_URL = "http://localhost:8000"
 
 st.set_page_config(
     page_title="RAG Website Chatbot",
@@ -98,3 +98,4 @@ for role, msg in st.session_state.messages[::-1]:
         st.markdown(f"🧑 **You:** {msg}")
     else:
         st.markdown(f"🤖 **Bot:** {msg}")
+

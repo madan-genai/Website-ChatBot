@@ -1,6 +1,6 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse, urlunparse
 
 from models2 import Base, Index, ChatHistory
 from config2 import (
@@ -8,7 +8,7 @@ from config2 import (
     MYSQL_HOST, MYSQL_DATABASE, MYSQL_PORT
 )
 
-password     = quote_plus(MYSQL_PASSWORD)
+password = quote_plus(MYSQL_PASSWORD)
 DATABASE_URL = (
     f"mysql+pymysql://{MYSQL_USER}:{password}"
     f"@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}"
@@ -20,10 +20,31 @@ engine = create_engine(
     pool_recycle=3600
 )
 
-# Auto-create tables on startup
 Base.metadata.create_all(bind=engine)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+def normalize_url(url: str) -> str:
+    url = str(url).strip()
+    if not url:
+        return url
+
+    if not url.startswith(("http://", "https://")):
+        url = "http://" + url
+
+    parsed = urlparse(url)
+    netloc = parsed.netloc.lower().replace("www.", "")
+    path = parsed.path.rstrip("/") or "/"
+
+    cleaned = parsed._replace(
+        scheme=parsed.scheme.lower(),
+        netloc=netloc,
+        path=path,
+        query="",
+        fragment=""
+    )
+    return urlunparse(cleaned)
 
 
 def get_db():
@@ -34,7 +55,6 @@ def get_db():
         db.close()
 
 
-# ── Index helpers ──────────────────────────────────────────────────────────
 def save_index(
     index_id: str,
     url: str,
@@ -45,16 +65,16 @@ def save_index(
     chunks_created: int = 0,
     error_message: str = None,
 ):
-    url    = str(url).strip()
+    url = normalize_url(url)
     record = db.query(Index).filter(Index.index_id == index_id).first()
 
     if record:
-        record.url             = url
+        record.url = url
         record.collection_name = collection_name
-        record.status          = status
-        record.pages_crawled   = pages_crawled
-        record.chunks_created  = chunks_created
-        record.error_message   = error_message
+        record.status = status
+        record.pages_crawled = pages_crawled
+        record.chunks_created = chunks_created
+        record.error_message = error_message
     else:
         record = Index(
             index_id=index_id,
@@ -77,7 +97,7 @@ def get_index(index_id: str, db: Session):
 
 
 def get_index_by_url(url: str, db: Session):
-    url = str(url).strip()
+    url = normalize_url(url)
     return db.query(Index).filter(Index.url == url).first()
 
 
@@ -90,14 +110,7 @@ def delete_index(index_id: str, db: Session) -> bool:
     return True
 
 
-# ── Chat history helpers ───────────────────────────────────────────────────
-def save_message(
-    index_id: str,
-    session_id: str,
-    role: str,
-    content: str,
-    db: Session,
-):
+def save_message(index_id: str, session_id: str, role: str, content: str, db: Session):
     msg = ChatHistory(
         index_id=index_id,
         session_id=session_id,
@@ -109,16 +122,11 @@ def save_message(
     return msg
 
 
-def get_chat_history(
-    index_id: str,
-    session_id: str,
-    db: Session,
-    limit: int = 50,
-) -> list[ChatHistory]:
+def get_chat_history(index_id: str, session_id: str, db: Session, limit: int = 50):
     return (
         db.query(ChatHistory)
         .filter(
-            ChatHistory.index_id   == index_id,
+            ChatHistory.index_id == index_id,
             ChatHistory.session_id == session_id,
         )
         .order_by(ChatHistory.created_at.asc())
@@ -129,14 +137,12 @@ def get_chat_history(
 
 def delete_chat_history(index_id: str, session_id: str, db: Session):
     db.query(ChatHistory).filter(
-        ChatHistory.index_id   == index_id,
+        ChatHistory.index_id == index_id,
         ChatHistory.session_id == session_id,
     ).delete()
     db.commit()
 
 
 def delete_all_chat_history(index_id: str, db: Session):
-    db.query(ChatHistory).filter(
-        ChatHistory.index_id == index_id
-    ).delete()
+    db.query(ChatHistory).filter(ChatHistory.index_id == index_id).delete()
     db.commit()

@@ -10,3 +10,5 @@ langchain-community
 langchain-qdrant
 langchain-ollama
 qdrant-client
+PyMySQL
+redis

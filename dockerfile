@@ -1,53 +1,67 @@
-# Base image (stable, production-ready)
 FROM python:3.12-slim
 
-# Prevent Python from writing .pyc files + better logs
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+# install-deps ko suppress karo — hum manually handle karenge
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0
 
-# Set working directory
 WORKDIR /app
 
-# Install system dependencies (Playwright + browser support)
-RUN apt-get update && apt-get install -y \
-    wget \
+# Debian Trixie compatible Chromium dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Core
+    ca-certificates \
     curl \
-    gnupg \
-    libglib2.0-0 \
+    wget \
+    # Chromium runtime deps
     libnss3 \
-    libfontconfig1 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libdbus-1-3 \
+    libxkbcommon0 \
     libx11-6 \
     libxcomposite1 \
-    libxcursor1 \
     libxdamage1 \
-    libxi6 \
-    libxtst6 \
-    libatk1.0-0 \
-    libpangocairo-1.0-0 \
+    libxext6 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
     libpango-1.0-0 \
-    libcups2 \
-    libxss1 \
-    libgtk-3-0 \
-    libasound2 \
+    libcairo2 \
+    libasound2t64 \
+    libxshmfence1 \
+    libglib2.0-0 \
+    # Fonts — Debian Trixie correct names
+    fonts-liberation \
+    fonts-unifont \
+    fontconfig \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first (for caching layer optimization)
 COPY requirements.txt .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip --root-user-action=ignore && \
+    pip install --no-cache-dir -r requirements.txt --root-user-action=ignore
 
-# Install Playwright browser
-RUN playwright install --with-deps chromium
+# install-deps skip — manually handled above
+RUN playwright install chromium
 
-# Copy project files
+# User setup
+RUN addgroup --system appgroup && \
+    adduser --system --ingroup appgroup appuser && \
+    chown -R appuser:appgroup /app && \
+    chown -R appuser:appgroup /ms-playwright
+
 COPY . .
 
-# Create data folder for SQLite / metadata
-RUN mkdir -p data
+RUN mkdir -p /app/data && \
+    chown -R appuser:appgroup /app/data
 
-# Expose FastAPI port
+USER appuser
+
 EXPOSE 8000
 
-# Start application
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,24 +1,46 @@
-import os
-from dotenv import load_dotenv
-load_dotenv()
+from pydantic import AnyHttpUrl
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# MySQL
-MYSQL_HOST     = os.getenv("MYSQL_HOST")
-MYSQL_PORT     = int(os.getenv("MYSQL_PORT", 3306))
-MYSQL_USER     = os.getenv("MYSQL_USER")
-MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD")
-MYSQL_DATABASE = os.getenv("MYSQL_DATABASE")
 
-# Qdrant
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+settings_config = SettingsConfigDict(
+    env_file=".env",
+    env_file_encoding="utf-8",
+    case_sensitive=False,
+)
 
-# Ollama
-OLLAMA_BASE_URL  = os.getenv("OLLAMA_BASE_URL",  "http://localhost:11434")
-EMBEDDING_MODEL  = os.getenv("EMBEDDING_MODEL",  "nomic-embed-text")
-LLM_MODEL        = os.getenv("LLM_MODEL",        "qwen2.5:1.5b")
 
-# Redis
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+class _Settings(BaseSettings):
+    model_config = settings_config
 
-# Misc
-DB_PATH = "data/metadata.db"
+    mysql_host: str
+    mysql_port: int = 3306
+    mysql_user: str
+    mysql_password: str
+    mysql_database: str
+
+    qdrant_url: AnyHttpUrl = "http://localhost:6333"
+
+    ollama_base_url: AnyHttpUrl = "http://localhost:11434"
+    embedding_model: str = "nomic-embed-text"
+    llm_model: str = "qwen2.5:1.5b"
+
+    redis_url: str = "redis://localhost:6379/0"
+
+    db_path: str = "data/metadata.db"
+
+
+_instance = _Settings()
+
+MYSQL_HOST = _instance.mysql_host
+MYSQL_PORT = _instance.mysql_port
+MYSQL_USER = _instance.mysql_user
+MYSQL_PASSWORD = _instance.mysql_password
+MYSQL_DATABASE = _instance.mysql_database
+
+QDRANT_URL = str(_instance.qdrant_url)
+OLLAMA_BASE_URL = str(_instance.ollama_base_url)
+EMBEDDING_MODEL = _instance.embedding_model
+LLM_MODEL = _instance.llm_model
+
+REDIS_URL = _instance.redis_url
+DB_PATH = _instance.db_path

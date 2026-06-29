@@ -1,14 +1,17 @@
-fastapi
-uvicorn[standard]
-pydantic
+fastapi==0.115.12
+uvicorn[standard]==0.34.3
+pydantic==2.11.5
+pydantic-settings==2.9.1
 
-playwright
-beautifulsoup4
+playwright==1.52.0
+beautifulsoup4==4.13.4
 
-langchain-core
-langchain-community
-langchain-qdrant
-langchain-ollama
-qdrant-client
-PyMySQL
-redis
+langchain-core==0.3.63
+langchain-community==0.3.24
+langchain-qdrant==0.2.0
+langchain-ollama==0.3.3
+qdrant-client==1.14.2
+
+PyMySQL==1.1.1
+redis==5.2.1
+cryptography>=42

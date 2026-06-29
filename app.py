@@ -40,9 +40,6 @@ logger = logging.getLogger("rag-app")
 app = FastAPI(title="RAG Chatbot", version="2.1.0")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# URL normalization
-# ─────────────────────────────────────────────────────────────────────────────
 def normalize_url(url: str) -> str:
     """
     Normalize URLs consistently across:
@@ -79,9 +76,6 @@ def normalize_url(url: str) -> str:
     return urlunparse(cleaned)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# LLM
-# ─────────────────────────────────────────────────────────────────────────────
 llm = ChatOllama(
     model=LLM_MODEL,
     base_url=OLLAMA_BASE_URL,
@@ -104,10 +98,6 @@ Answer:
 """.strip()
 )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Background indexing job
-# ─────────────────────────────────────────────────────────────────────────────
 async def index_site(index_id: str, url: str):
     db = SessionLocal()
     normalized_url = normalize_url(url)
@@ -115,7 +105,6 @@ async def index_site(index_id: str, url: str):
     try:
         logger.info(f"Indexing started: index_id={index_id} url={normalized_url}")
 
-        # Save "processing" row immediately
         save_index(
             index_id=index_id,
             url=normalized_url,
@@ -137,11 +126,7 @@ async def index_site(index_id: str, url: str):
 
         await asyncio.to_thread(build_vectorstore, docs, collection_name)
 
-        # pages = number of crawled docs
         pages_crawled = len(docs)
-
-        # For now chunks_created is approximated by number of docs.
-        # If you later want exact chunk count, return it from build_vectorstore().
         chunks_created = len(docs)
 
         save_index(
@@ -175,10 +160,6 @@ async def index_site(index_id: str, url: str):
     finally:
         db.close()
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Health
-# ─────────────────────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
     from redis_cache import REDIS_AVAILABLE
@@ -197,7 +178,6 @@ async def health():
     except Exception as e:
         checks["mysql"] = f"error: {e}"
 
-    # Qdrant ping
     try:
         import httpx
         from config2 import QDRANT_URL
@@ -210,10 +190,6 @@ async def health():
     overall = "healthy" if all(v == "ok" for v in checks.values()) else "degraded"
     return {"status": overall, "checks": checks}
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# List all indexes (NEW)
-# ─────────────────────────────────────────────────────────────────────────────
 @app.get("/indexes")
 async def list_indexes():
     db = SessionLocal()
@@ -236,9 +212,6 @@ async def list_indexes():
         db.close()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Create index
-# ─────────────────────────────────────────────────────────────────────────────
 @app.post("/index")
 async def index(req: IndexRequest):
     if not req.url or not str(req.url).strip():
@@ -268,10 +241,6 @@ async def index(req: IndexRequest):
     finally:
         db.close()
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Reindex (force re-scrape)
-# ─────────────────────────────────────────────────────────────────────────────
 @app.post("/reindex")
 async def reindex(req: ReindexRequest):
     """
@@ -288,8 +257,6 @@ async def reindex(req: ReindexRequest):
         if existing:
             old_id = existing.index_id
             logger.info(f"Reindex requested for existing URL: {url} old_index_id={old_id}")
-
-            # 1) delete Qdrant collection
             if existing.collection_name:
                 try:
                     await asyncio.to_thread(delete_vectorstore, existing.collection_name)
@@ -317,10 +284,6 @@ async def reindex(req: ReindexRequest):
     finally:
         db.close()
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Delete index
-# ─────────────────────────────────────────────────────────────────────────────
 @app.delete("/index/{index_id}")
 async def remove_index(index_id: str):
     db = SessionLocal()
@@ -349,10 +312,6 @@ async def remove_index(index_id: str):
     finally:
         db.close()
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Get single index status
-# ─────────────────────────────────────────────────────────────────────────────
 @app.get("/index/{index_id}")
 async def status(index_id: str):
     db = SessionLocal()
@@ -374,10 +333,6 @@ async def status(index_id: str):
     finally:
         db.close()
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Chat stream
-# ─────────────────────────────────────────────────────────────────────────────
 @app.post("/chat/stream")
 async def chat(req: QueryRequest):
     if not req.question or not req.question.strip():
@@ -465,9 +420,6 @@ async def chat(req: QueryRequest):
         db.close()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Chat history
-# ─────────────────────────────────────────────────────────────────────────────
 @app.get("/chat/history/{index_id}", response_model=ChatHistoryResponse)
 async def chat_history(index_id: str, session_id: str = "default"):
     db = SessionLocal()
@@ -489,9 +441,6 @@ async def chat_history(index_id: str, session_id: str = "default"):
         db.close()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Clear chat history
-# ─────────────────────────────────────────────────────────────────────────────
 @app.delete("/chat/history/{index_id}")
 async def clear_chat_history(index_id: str, session_id: str = "default"):
     db = SessionLocal()
@@ -510,9 +459,6 @@ async def clear_chat_history(index_id: str, session_id: str = "default"):
         db.close()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Root
-# ─────────────────────────────────────────────────────────────────────────────
 @app.get("/")
 async def root():
     return {
